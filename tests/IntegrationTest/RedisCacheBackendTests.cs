@@ -23,7 +23,6 @@ namespace IntegrationTest
          this.container = builder.Build();
 
          this.backend = this.container.Resolve<ICacheBackend<string>>();
-         var exists = await this.backend.ExistsAsync("key2");
          await this.backend.ClearAsync(); // Asegura entorno limpio
       }
 
