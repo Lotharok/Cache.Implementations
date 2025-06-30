@@ -61,6 +61,7 @@ namespace Cache.Tests
          var expiration = new CacheExpirationOptions
          {
             AbsoluteExpirationAt = DateTimeOffset.UtcNow.AddMilliseconds(200),
+            SlidingExpiration = null,
          };
 
          await this.backend.SetAsync(key, value, expiration, new string[0]);
