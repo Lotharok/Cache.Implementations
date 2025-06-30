@@ -1,0 +1,13 @@
+{
+  "settings": {
+    "documentationRules": {
+      "documentationCulture": "es-MX"
+    },
+    "namingRules": {
+      "allowedHungarianPrefixes": [ "dt" ]
+    },
+    "orderingRules": {
+      "usingDirectivesPlacement": "outsideNamespace"
+    }
+  }
+}

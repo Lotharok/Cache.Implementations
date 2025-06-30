@@ -1,0 +1,27 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+   <PropertyGroup>
+      <PackageId>ChacBolay.Cache.Redis</PackageId>
+      <TargetFramework>netstandard2.0</TargetFramework>
+      <LangVersion>latest</LangVersion>
+      <Nullable>enable</Nullable>
+      <CodeAnalysisRuleSet>..\..\ruleset.ruleset</CodeAnalysisRuleSet>
+      <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+      <NoWarn>NU1803;</NoWarn>
+   </PropertyGroup>
+
+   <PropertyGroup>
+      <DocumentationFile>bin\$(Configuration)\$(TargetFramework)\$(AssemblyName).xml</DocumentationFile>
+   </PropertyGroup>
+
+   <ItemGroup>
+      <AdditionalFiles Include="../../stylecop.json" />
+      <PackageReference Include="ChacBolay.Component.Cache" Version="0.0.0.1-local" />
+      <PackageReference Include="StackExchange.Redis" Version="2.8.41" />
+      <PackageReference Include="StyleCop.Analyzers" Version="1.1.118">
+         <PrivateAssets>all</PrivateAssets>
+         <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+      </PackageReference>
+   </ItemGroup>
+
+</Project>
