@@ -16,8 +16,9 @@ namespace Cache.InMemory
    public class MemoryCacheBackend : ICacheBackend<object>
    {
       private readonly IMemoryCache memoryCache;
-      private readonly ConcurrentDictionary<string, string> keysIndex = new ();
-      private readonly ConcurrentDictionary<string, ConcurrentBag<string>> tagIndex = new ();
+      private readonly ConcurrentDictionary<string, string> keysIndex = new();
+      private readonly ConcurrentDictionary<string, ConcurrentDictionary<string, byte>> tagIndex = new();
+      private readonly ConcurrentDictionary<string, string[]> keyToTagsIndex = new();
 
       /// <summary>
       /// Initializes a new instance of the <see cref="MemoryCacheBackend"/> class with the specified memory cache.
@@ -41,6 +42,7 @@ namespace Cache.InMemory
          }
 
          this.tagIndex.Clear();
+         this.keyToTagsIndex.Clear();
          return Task.CompletedTask;
       }
 
@@ -77,6 +79,23 @@ namespace Cache.InMemory
       {
          this.memoryCache.Remove(key);
          this.keysIndex.TryRemove(key, out _);
+
+         if (this.keyToTagsIndex.TryRemove(key, out var associatedTags))
+         {
+            foreach (var tag in associatedTags)
+            {
+               if (this.tagIndex.TryGetValue(tag, out var keysSet))
+               {
+                  keysSet.TryRemove(key, out _);
+
+                  if (keysSet.IsEmpty)
+                  {
+                     this.tagIndex.TryRemove(tag, out _);
+                  }
+               }
+            }
+         }
+
          return Task.CompletedTask;
       }
 
@@ -88,6 +107,22 @@ namespace Cache.InMemory
          {
             this.memoryCache.Remove(key);
             this.keysIndex.TryRemove(key, out _);
+
+            if (this.keyToTagsIndex.TryRemove(key, out var associatedTags))
+            {
+               foreach (var tag in associatedTags)
+               {
+                  if (this.tagIndex.TryGetValue(tag, out var keysSet))
+                  {
+                     keysSet.TryRemove(key, out _);
+
+                     if (keysSet.IsEmpty)
+                     {
+                        this.tagIndex.TryRemove(tag, out _);
+                     }
+                  }
+               }
+            }
          }
 
          return Task.CompletedTask;
@@ -99,14 +134,12 @@ namespace Cache.InMemory
          var uniqueKeys = new HashSet<string>();
          foreach (var tag in tags.Distinct())
          {
-            if (this.tagIndex.TryGetValue(tag, out var bag))
+            if (this.tagIndex.TryRemove(tag, out var keysSet))
             {
-               foreach (var key in bag)
+               foreach (var key in keysSet.Keys)
                {
                   uniqueKeys.Add(key);
                }
-
-               this.tagIndex.TryRemove(tag, out _);
             }
          }
 
@@ -114,6 +147,7 @@ namespace Cache.InMemory
          {
             this.memoryCache.Remove(key);
             this.keysIndex.TryRemove(key, out _);
+            this.keyToTagsIndex.TryRemove(key, out _);
          }
 
          return Task.CompletedTask;
@@ -122,19 +156,23 @@ namespace Cache.InMemory
       /// <inheritdoc />
       public Task SetAsync(string key, object buffer, CacheExpirationOptions expiration, string[] tags, CancellationToken cancellationToken = default)
       {
-         var options = BuildMemoryCacheEntryOptions(expiration);
+         var options = this.BuildMemoryCacheEntryOptions(expiration);
          this.memoryCache.Set(key, buffer, options);
          this.keysIndex[key] = key;
-         foreach (var tag in tags.Distinct())
+
+         var distinctTags = tags.Distinct().ToArray();
+         this.keyToTagsIndex[key] = distinctTags;
+
+         foreach (var tag in distinctTags)
          {
-            var bag = this.tagIndex.GetOrAdd(tag, _ => new ConcurrentBag<string>());
-            bag.Add(key);
+            var keysSet = this.tagIndex.GetOrAdd(tag, _ => new ConcurrentDictionary<string, byte>());
+            keysSet.TryAdd(key, 0);
          }
 
          return Task.CompletedTask;
       }
 
-      private static MemoryCacheEntryOptions BuildMemoryCacheEntryOptions(CacheExpirationOptions expiration)
+      private MemoryCacheEntryOptions BuildMemoryCacheEntryOptions(CacheExpirationOptions expiration)
       {
          var options = new MemoryCacheEntryOptions();
 
@@ -151,6 +189,31 @@ namespace Cache.InMemory
          {
             options.SlidingExpiration = expiration.SlidingExpiration;
          }
+
+         options.RegisterPostEvictionCallback((k, v, reason, state) =>
+         {
+            if (reason != EvictionReason.Replaced)
+            {
+               var keyStr = k.ToString();
+               this.keysIndex.TryRemove(keyStr, out _);
+
+               if (this.keyToTagsIndex.TryRemove(keyStr, out var associatedTags))
+               {
+                  foreach (var tag in associatedTags)
+                  {
+                     if (this.tagIndex.TryGetValue(tag, out var keysSet))
+                     {
+                        keysSet.TryRemove(keyStr, out _);
+
+                        if (keysSet.IsEmpty)
+                        {
+                           this.tagIndex.TryRemove(tag, out _);
+                        }
+                     }
+                  }
+               }
+            }
+         });
 
          return options;
       }
