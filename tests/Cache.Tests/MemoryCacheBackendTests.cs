@@ -188,5 +188,35 @@ namespace Cache.Tests
          Assert.Contains("abc-2", keys);
          Assert.DoesNotContain("def-1", keys);
       }
+
+      [Fact]
+      public async Task GetKeysAsync_ShouldNotReturnExpiredKeys()
+      {
+         var key = "expired-key";
+         var value = "value";
+         var expiration = new CacheExpirationOptions
+         {
+            AbsoluteExpirationRelativeToNow = TimeSpan.FromMilliseconds(100),
+         };
+
+         await this.backend.SetAsync(key, value, expiration, new string[0]);
+
+         // Verify key exists initially
+         var keysInitial = await this.backend.GetKeysAsync();
+         Assert.Contains(key, keysInitial);
+
+         // Wait for expiration
+         await Task.Delay(200);
+
+         // Force eviction
+         this.memoryCache.Compact(1.0);
+
+         // Give a small window for the callback to execute on the threadpool
+         await Task.Delay(50);
+
+         // Verify key is gone from index
+         var keysAfter = await this.backend.GetKeysAsync();
+         Assert.DoesNotContain(key, keysAfter);
+      }
    }
 }

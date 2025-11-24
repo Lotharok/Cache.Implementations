@@ -465,6 +465,20 @@ namespace Cache.Tests
          this.redisMock.Verify(r => r.KeyDeleteAsync(It.IsAny<RedisKey>(), CommandFlags.None), Times.Once);
       }
 
+      [Fact]
+      public async Task SetAsync_ShouldThrowInvalidOperationException_WhenTypeIsUnsupported()
+      {
+         var key = "unsupported-key";
+         var value = 123; // int is not supported
+         var expiration = new CacheExpirationOptions();
+         var tags = Array.Empty<string>();
+
+         var cacheBackend = new RedisCacheBackend<int>(this.prefix, this.multiplexerMock.Object);
+
+         await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            cacheBackend.SetAsync(key, value, expiration, tags));
+      }
+
       private static IAsyncEnumerable<RedisKey> GetAsyncEnumerable(IEnumerable<RedisKey> keys)
       {
          return new TestAsyncEnumerable<RedisKey>(keys);
