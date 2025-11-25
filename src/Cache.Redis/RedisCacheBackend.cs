@@ -15,6 +15,7 @@ namespace Cache.Redis
    /// <typeparam name="TBuffer">Data type.</typeparam>
    public class RedisCacheBackend<TBuffer> : ICacheBackend<TBuffer>
    {
+      private const int BatchSize = 1000;
       private readonly IDatabase redis;
       private readonly string namespacePrefix;
 
@@ -49,9 +50,20 @@ namespace Cache.Redis
                continue;
             }
 
-            await foreach (var key in server.KeysAsync(pattern: $"{this.namespacePrefix}:*").WithCancellation(cancellationToken))
+            var batch = new List<RedisKey>(BatchSize);
+            await foreach (var key in server.KeysAsync(pattern: $"{{{this.namespacePrefix}}}:*").WithCancellation(cancellationToken))
             {
-               await this.redis.KeyDeleteAsync(key);
+               batch.Add(key);
+               if (batch.Count >= BatchSize)
+               {
+                  await this.redis.KeyDeleteAsync(batch.ToArray());
+                  batch.Clear();
+               }
+            }
+
+            if (batch.Count > 0)
+            {
+               await this.redis.KeyDeleteAsync(batch.ToArray());
             }
          }
       }
@@ -106,10 +118,43 @@ namespace Cache.Redis
       /// <inheritdoc />
       public async Task RemoveByPrefixAsync(string prefix, CancellationToken cancellationToken = default)
       {
-         var keys = await this.GetKeysAsync(prefix, cancellationToken);
-         foreach (var key in keys)
+         if (string.IsNullOrWhiteSpace(prefix))
          {
-            await this.redis.KeyDeleteAsync(key);
+            return;
+         }
+
+         var cleanPrefix = prefix.TrimEnd('*');
+         if (string.IsNullOrWhiteSpace(cleanPrefix))
+         {
+            return;
+         }
+
+         var pattern = $"{this.Namespaced(cleanPrefix)}*";
+         var batch = new List<RedisKey>(BatchSize);
+         var endpoints = this.redis.Multiplexer.GetEndPoints();
+         foreach (var endpoint in endpoints)
+         {
+            var server = this.redis.Multiplexer.GetServer(endpoint);
+            if (!server.IsConnected || server.IsReplica)
+            {
+               continue;
+            }
+
+            await foreach (var key in server.KeysAsync(pattern: $"{pattern}*")
+                              .WithCancellation(cancellationToken))
+            {
+               batch.Add(key);
+               if (batch.Count >= BatchSize)
+               {
+                  await this.redis.KeyDeleteAsync(batch.ToArray());
+                  batch.Clear();
+               }
+            }
+         }
+
+         if (batch.Count > 0)
+         {
+            await this.redis.KeyDeleteAsync(batch.ToArray());
          }
       }
 
@@ -120,14 +165,14 @@ namespace Cache.Redis
          {
             var tagKey = this.GetTagKey(tag);
             var keys = await this.redis.SetMembersAsync(tagKey);
-            const int batchSize = 100;
-            var keyBatches = keys
-               .Select(key => (RedisKey)this.Namespaced(key.ToString()))
-               .Batch(batchSize);
 
-            foreach (var batch in keyBatches)
+            if (keys.Length > 0)
             {
-               await this.redis.KeyDeleteAsync(batch.ToArray());
+               var namespacedKeys = keys
+                  .Select(key => (RedisKey)this.Namespaced(key.ToString()))
+                  .ToArray();
+
+               await this.redis.KeyDeleteAsync(namespacedKeys);
             }
 
             await this.redis.KeyDeleteAsync(tagKey);
@@ -139,15 +184,25 @@ namespace Cache.Redis
       {
          var expiry = this.GetRedisExpiry(expiration);
          RedisValue value = this.ConvertToRedisValue(buffer);
-         await this.redis.StringSetAsync(this.Namespaced(key), value, expiry);
+         var tasks = new List<Task>(1 + tags.Length);
+         tasks.Add(this.redis.StringSetAsync(this.Namespaced(key), value, expiry));
          foreach (var tag in tags.Distinct())
          {
-            await this.redis.SetAddAsync(this.GetTagKey(tag), key);
+            tasks.Add(this.redis.SetAddAsync(this.GetTagKey(tag), key));
          }
+
+         await Task.WhenAll(tasks);
       }
 
-      private string Namespaced(string key) => $"{this.namespacePrefix}:{key}";
+      /// <summary>
+      /// Genera una key con hash tag para garantizar que todas las keys del mismo namespace
+      /// estén en el mismo slot en Redis Cluster. En Standalone, los hash tags son ignorados sin impacto.
+      /// </summary>
+      private string Namespaced(string key) => $"{{{this.namespacePrefix}}}:{key}";
 
+      /// <summary>
+      /// Genera la key que almacena el SET de keys asociadas a un tag.
+      /// </summary>
       private string GetTagKey(string tag) => this.Namespaced($"tag:{tag}");
 
       private TimeSpan? GetRedisExpiry(CacheExpirationOptions expiration)
