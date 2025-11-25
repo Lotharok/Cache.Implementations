@@ -24,6 +24,7 @@ namespace Cache.Tests
          this.redisMock = new Mock<IDatabase>();
          this.multiplexerMock = new Mock<IConnectionMultiplexer>();
          this.multiplexerMock.Setup(m => m.GetDatabase(It.IsAny<int>(), It.IsAny<object>())).Returns(this.redisMock.Object);
+         this.redisMock.Setup(r => r.Multiplexer).Returns(this.multiplexerMock.Object);
          this.backend = new RedisCacheBackend<string>(this.prefix, this.multiplexerMock.Object);
       }
 
@@ -108,8 +109,8 @@ namespace Cache.Tests
          await this.backend.SetAsync(key, value, expiration, tags);
 
          this.redisMock.Verify(r => r.StringSetAsync(this.Namespaced(key), value, It.IsAny<TimeSpan?>(), false, When.Always, CommandFlags.None), Times.Once);
-         this.redisMock.Verify(r => r.SetAddAsync($"{this.prefix}:tag:tag1", key, CommandFlags.None), Times.Once);
-         this.redisMock.Verify(r => r.SetAddAsync($"{this.prefix}:tag:tag2", key, CommandFlags.None), Times.Once);
+         this.redisMock.Verify(r => r.SetAddAsync(this.Namespaced("tag:tag1"), key, CommandFlags.None), Times.Once);
+         this.redisMock.Verify(r => r.SetAddAsync(this.Namespaced("tag:tag2"), key, CommandFlags.None), Times.Once);
       }
 
       [Fact]
@@ -187,17 +188,17 @@ namespace Cache.Tests
 
          await this.backend.RemoveAsync(key);
 
-         this.redisMock.Verify(r => r.KeyDeleteAsync(this.Namespaced(key), CommandFlags.None), Times.Once);
+         this.redisMock.Verify(r => r.KeyDeleteAsync(this.Namespaced(key), It.IsAny<CommandFlags>()), Times.Once);
       }
 
       [Fact]
       public async Task RemoveByTagsAsync_DeletesTaggedKeys()
       {
          var tags = new[] { "tag1" };
-         var tagKey = $"{this.prefix}:tag:{tags[0]}";
+         var tagKey = this.Namespaced($"tag:{tags[0]}");
          var redisKeys = new RedisValue[] { "key1", "key2" };
 
-         this.redisMock.Setup(r => r.SetMembersAsync(tagKey, CommandFlags.None)).ReturnsAsync(redisKeys);
+         this.redisMock.Setup(r => r.SetMembersAsync(tagKey, It.IsAny<CommandFlags>())).ReturnsAsync(redisKeys);
 
          await this.backend.RemoveByTagsAsync(tags);
 
@@ -209,7 +210,7 @@ namespace Cache.Tests
       public async Task RemoveByTagsAsync_DeletesTaggedKeys_Batch()
       {
          var tags = new[] { "tag1" };
-         var tagKey = $"{this.prefix}:tag:{tags[0]}";
+         var tagKey = this.Namespaced($"tag:{tags[0]}");
          var redisKeys = new RedisValue[]
          {
             "key1", "key2", "key1", "key2", "key1", "key2", "key1", "key2", "key1", "key2",
@@ -226,11 +227,11 @@ namespace Cache.Tests
             "key1", "key2", "key1", "key2", "key1", "key2", "key1", "key2", "key1", "key2",
          };
 
-         this.redisMock.Setup(r => r.SetMembersAsync(tagKey, CommandFlags.None)).ReturnsAsync(redisKeys);
+         this.redisMock.Setup(r => r.SetMembersAsync(tagKey, It.IsAny<CommandFlags>())).ReturnsAsync(redisKeys);
 
          await this.backend.RemoveByTagsAsync(tags);
 
-         this.redisMock.Verify(r => r.KeyDeleteAsync(It.IsAny<RedisKey[]>(), CommandFlags.None), Times.Exactly(2));
+         this.redisMock.Verify(r => r.KeyDeleteAsync(It.IsAny<RedisKey[]>(), CommandFlags.None), Times.Once);
          this.redisMock.Verify(r => r.KeyDeleteAsync(tagKey, CommandFlags.None), Times.Once);
       }
 
@@ -260,10 +261,7 @@ namespace Cache.Tests
          await cacheBackend.ClearAsync();
 
          // Assert
-         foreach (var key in keys)
-         {
-            databaseMock.Verify(d => d.KeyDeleteAsync(key, CommandFlags.None), Times.Once);
-         }
+         databaseMock.Verify(d => d.KeyDeleteAsync(keys, CommandFlags.None), Times.Once);
       }
 
       [Fact]
@@ -331,7 +329,7 @@ namespace Cache.Tests
          this.multiplexerMock.Setup(m => m.GetServer(endpoint, null)).Returns(serverMock.Object);
          serverMock.Setup(s => s.IsConnected).Returns(true);
          serverMock.Setup(s => s.IsReplica).Returns(false);
-         serverMock.Setup(s => s.KeysAsync(It.IsAny<int>(), It.Is<RedisValue>(v => v.ToString().StartsWith(pattern)), It.IsAny<int>(), It.IsAny<long>(), It.IsAny<int>(), CommandFlags.None))
+         serverMock.Setup(s => s.KeysAsync(It.IsAny<int>(), It.IsAny<RedisValue>(), It.IsAny<int>(), It.IsAny<long>(), It.IsAny<int>(), It.IsAny<CommandFlags>()))
                    .Returns(asyncKeys);
 
          var databaseMock = new Mock<IDatabase>();
@@ -398,10 +396,7 @@ namespace Cache.Tests
          await cacheBackend.RemoveByPrefixAsync(pattern);
 
          // Assert
-         foreach (var key in keysFound)
-         {
-            this.redisMock.Verify(r => r.KeyDeleteAsync(key, CommandFlags.None), Times.Once);
-         }
+         this.redisMock.Verify(r => r.KeyDeleteAsync(redisKeys, CommandFlags.None), Times.Once);
       }
 
       [Fact]
@@ -462,7 +457,7 @@ namespace Cache.Tests
          await cacheBackend.RemoveByPrefixAsync(this.prefix, token);
 
          // Assert
-         this.redisMock.Verify(r => r.KeyDeleteAsync(It.IsAny<RedisKey>(), CommandFlags.None), Times.Once);
+         this.redisMock.Verify(r => r.KeyDeleteAsync(It.IsAny<RedisKey[]>(), CommandFlags.None), Times.Once);
       }
 
       [Fact]
@@ -479,11 +474,132 @@ namespace Cache.Tests
             cacheBackend.SetAsync(key, value, expiration, tags));
       }
 
+      [Fact]
+      public async Task GetAsync_ShouldThrowInvalidOperationException_WhenTypeIsUnsupported()
+      {
+         // Arrange
+         var key = "unsupported-type-key";
+         var redisValue = (RedisValue)123; // An integer value from Redis
+
+         this.redisMock.Setup(r => r.StringGetAsync(this.Namespaced(key), It.IsAny<CommandFlags>()))
+            .ReturnsAsync(redisValue);
+
+         var cacheBackend = new RedisCacheBackend<int>(this.prefix, this.multiplexerMock.Object);
+
+         // Act & Assert
+         await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            cacheBackend.GetAsync(key));
+      }
+
+      [Theory]
+      [InlineData(null)]
+      [InlineData("")]
+      [InlineData("   ")]
+      public async Task RemoveByPrefixAsync_ShouldHandleInvalidPrefixes(string invalidPrefix)
+      {
+         // Act
+         await this.backend.RemoveByPrefixAsync(invalidPrefix);
+
+         // Assert
+         // Verify that no KeyDeleteAsync operations were attempted
+         this.redisMock.Verify(r => r.KeyDeleteAsync(It.IsAny<RedisKey>(), It.IsAny<CommandFlags>()), Times.Never);
+         this.redisMock.Verify(r => r.KeyDeleteAsync(It.IsAny<RedisKey[]>(), It.IsAny<CommandFlags>()), Times.Never);
+      }
+
+      [Theory]
+      [InlineData("*")]
+      [InlineData("  *")]
+      public async Task RemoveByPrefixAsync_ShouldHandlePrefixBecomingInvalidAfterTrim(string prefixWithWildcard)
+      {
+         // Act
+         await this.backend.RemoveByPrefixAsync(prefixWithWildcard);
+
+         // Assert
+         // Verify that no KeyDeleteAsync operations were attempted
+         this.redisMock.Verify(r => r.KeyDeleteAsync(It.IsAny<RedisKey>(), It.IsAny<CommandFlags>()), Times.Never);
+         this.redisMock.Verify(r => r.KeyDeleteAsync(It.IsAny<RedisKey[]>(), It.IsAny<CommandFlags>()), Times.Never);
+      }
+
+      [Fact]
+      public async Task RemoveByPrefixAsync_ShouldSkipDisconnectedOrReplicaServers()
+      {
+         // Arrange
+         var endpoint = new DnsEndPoint("localhost", 6379);
+         var serverMock = new Mock<IServer>();
+         var pattern = "somePrefix";
+
+         // Mock a disconnected or replica server
+         serverMock.SetupGet(s => s.IsConnected).Returns(false); // disconnected
+         serverMock.SetupGet(s => s.IsReplica).Returns(true);    // replica
+
+         this.multiplexerMock.Setup(m => m.GetEndPoints(It.IsAny<bool>())).Returns(new EndPoint[] { endpoint });
+         this.multiplexerMock.Setup(m => m.GetServer(endpoint, null)).Returns(serverMock.Object);
+
+         // Act
+         await this.backend.RemoveByPrefixAsync(pattern);
+
+         // Assert
+         // Verify that no KeyDeleteAsync operations were attempted
+         this.redisMock.Verify(r => r.KeyDeleteAsync(It.IsAny<RedisKey>(), It.IsAny<CommandFlags>()), Times.Never);
+         this.redisMock.Verify(r => r.KeyDeleteAsync(It.IsAny<RedisKey[]>(), It.IsAny<CommandFlags>()), Times.Never);
+      }
+
+      [Fact]
+      public async Task RemoveByPrefixAsync_ShouldHandleBatching()
+      {
+         // Arrange
+         var endpoint = new DnsEndPoint("localhost", 6379);
+         var serverMock = new Mock<IServer>();
+         var pattern = "batchPrefix";
+         var keysToGenerate = 2500; // More than BatchSize (1000) to ensure multiple batches
+         var keys = Enumerable.Range(0, keysToGenerate).Select(i => (RedisKey)$"key:{i}").ToArray();
+         var asyncKeys = new TestAsyncEnumerable<RedisKey>(keys);
+
+         this.multiplexerMock.Setup(m => m.GetEndPoints(It.IsAny<bool>())).Returns(new EndPoint[] { endpoint });
+         this.multiplexerMock.Setup(m => m.GetServer(endpoint, null)).Returns(serverMock.Object);
+         serverMock.Setup(s => s.IsConnected).Returns(true);
+         serverMock.Setup(s => s.IsReplica).Returns(false);
+         serverMock.Setup(s => s.KeysAsync(It.IsAny<int>(), It.IsAny<RedisValue>(), It.IsAny<int>(), It.IsAny<long>(), It.IsAny<int>(), It.IsAny<CommandFlags>()))
+            .Returns(asyncKeys);
+
+         // Act
+         await this.backend.RemoveByPrefixAsync(pattern);
+
+         // Assert
+         // Expecting keysToGenerate / BatchSize + 1 calls (2500 / 1000 + 1 = 3 calls)
+         this.redisMock.Verify(r => r.KeyDeleteAsync(It.IsAny<RedisKey[]>(), It.IsAny<CommandFlags>()), Times.Exactly(3));
+      }
+
+      [Fact]
+      public async Task ClearAsync_ShouldHandleBatching()
+      {
+         // Arrange
+         var endpoint = new DnsEndPoint("localhost", 6379);
+         var serverMock = new Mock<IServer>();
+         var keysToGenerate = 2500; // More than BatchSize (1000) to ensure multiple batches
+         var keys = Enumerable.Range(0, keysToGenerate).Select(i => (RedisKey)$"key:{i}").ToArray();
+         var asyncKeys = new TestAsyncEnumerable<RedisKey>(keys);
+
+         this.multiplexerMock.Setup(m => m.GetEndPoints(It.IsAny<bool>())).Returns(new EndPoint[] { endpoint });
+         this.multiplexerMock.Setup(m => m.GetServer(endpoint, null)).Returns(serverMock.Object);
+         serverMock.Setup(s => s.IsConnected).Returns(true);
+         serverMock.Setup(s => s.IsReplica).Returns(false);
+         serverMock.Setup(s => s.KeysAsync(It.IsAny<int>(), It.IsAny<RedisValue>(), It.IsAny<int>(), It.IsAny<long>(), It.IsAny<int>(), It.IsAny<CommandFlags>()))
+            .Returns(asyncKeys);
+
+         // Act
+         await this.backend.ClearAsync();
+
+         // Assert
+         // Expecting keysToGenerate / BatchSize + 1 calls (2500 / 1000 + 1 = 3 calls)
+         this.redisMock.Verify(r => r.KeyDeleteAsync(It.IsAny<RedisKey[]>(), It.IsAny<CommandFlags>()), Times.Exactly(3));
+      }
+
       private static IAsyncEnumerable<RedisKey> GetAsyncEnumerable(IEnumerable<RedisKey> keys)
       {
          return new TestAsyncEnumerable<RedisKey>(keys);
       }
 
-      private string Namespaced(string key) => $"{this.prefix}:{key}";
+      private string Namespaced(string key) => $"{{{this.prefix}}}:{key}";
    }
 }

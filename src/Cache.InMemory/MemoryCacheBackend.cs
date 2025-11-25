@@ -16,9 +16,9 @@ namespace Cache.InMemory
    public class MemoryCacheBackend : ICacheBackend<object>
    {
       private readonly IMemoryCache memoryCache;
-      private readonly ConcurrentDictionary<string, string> keysIndex = new();
-      private readonly ConcurrentDictionary<string, ConcurrentDictionary<string, byte>> tagIndex = new();
-      private readonly ConcurrentDictionary<string, string[]> keyToTagsIndex = new();
+      private readonly ConcurrentDictionary<string, string> keysIndex = new ();
+      private readonly ConcurrentDictionary<string, ConcurrentDictionary<string, byte>> tagIndex = new ();
+      private readonly ConcurrentDictionary<string, string[]> keyToTagsIndex = new ();
 
       /// <summary>
       /// Initializes a new instance of the <see cref="MemoryCacheBackend"/> class with the specified memory cache.
